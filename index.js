@@ -248,7 +248,7 @@ class CardanocliJs {
       const value = {};
       let datumHash;
       valueList.forEach((v) => {
-        if (v.includes("TxOutDatumHash") || v.includes("TxOutDatumNone") ) {
+        if ((v.includes("TxOutDatumHash")) || (v.includes("TxOutDatumNone"))) { // delete NaN and undefined !!!!!!
           if (!v.includes("None"))
             datumHash = JSON.parse(v.trim().split(" ")[2]);
           return;
@@ -286,6 +286,72 @@ class CardanocliJs {
     return {
       vkey,
       skey,
+    };
+  }
+
+  /**
+   *
+   * @param {string} account - Name of account
+   * @param {string} policy_Name - Name of the policy
+   * @param {numeric} slot_close - ending slot from current
+   * @return {object}
+   * 
+   */
+   policyAddressKeyGen(account,policy_Name, slot_close) {
+    if (this.httpProvider && typeof window !== "undefined") {
+      let response = fetch(`${this.httpProvider}/${account}/addressKeyGen`);
+      return response.then((res) => res.json());
+    }
+    let vkey = `${this.dir}/priv/wallet/${account}/policy/${policy_Name}.vkey`;
+    let skey = `${this.dir}/priv/wallet/${account}/policy/${policy_Name}.skey`;
+    let hash_file = `${this.dir}/priv/wallet/${account}/policy/${policy_Name}.hash`;
+    let exists = false;
+    fs.stat(vkey, function(err, stat) {
+      if(err == null) {
+          console.log('File exists');
+          exists = true;
+      } else if(err.code === 'ENOENT') {
+          // file does not exist
+         
+      } else {
+          console.log('Some other error: ', err.code);
+      }
+  });
+
+    if (!exists) {
+    // fileExists([vkey, skey, hash_file]);
+    execSync(`mkdir -p ${this.dir}/priv/wallet/${account}/policy`);
+    execSync(`${this.cliPath} address key-gen \
+                        --verification-key-file ${vkey} \
+                        --signing-key-file ${skey}
+                    `);
+
+    }
+    let hash = execSync(`${this.cliPath} address key-hash \
+    --payment-verification-key-file ${vkey} \
+    `).toString().replace(/(\n|\n)/gm, "");
+    console.log('-------+policyAddressKeyGen+---------',hash,'\n');
+/* fs.writeFile(hash_file, tmp+'\n'); 
+    let hash =  execSync(`cat ${hash_file}`); */
+    let tmp = JSON.parse(
+      execSync(`${this.cliPath} query tip \
+        --${this.network} \
+        --cardano-mode
+                        `).toString()
+    );
+    console.log('-------+policyAddressKeyGen+---------',JSON.stringify(tmp, null, 2));
+    let slot = JSON.parse(
+      execSync(`${this.cliPath} query tip \
+        --${this.network} \
+        --cardano-mode
+                        `).toString()
+    ).slot+slot_close;
+       console.log(slot+'\n');                 
+    return {
+      vkey,
+      skey,
+      hash,
+      slot
     };
   }
 
@@ -469,8 +535,10 @@ class CardanocliJs {
       const value = {};
       utxos.forEach((utxo) => {
         Object.keys(utxo.value).forEach((asset) => {
+          
           if (!value[asset]) value[asset] = 0;
-          value[asset] += utxo.value[asset];
+          value[asset] += utxo.value[asset]; 
+        
         });
       });
 
@@ -681,7 +749,7 @@ class CardanocliJs {
                         } \
                         --out-file ${
                           this.dir
-                        }/priv/pool/${poolName}/${poolName}.node.cert
+                        }/priv/pool/${poolName}/${poolName}.node.cert 
                     `);
     return `${this.dir}/priv/pool/${poolName}/${poolName}.node.cert`;
   }
@@ -897,12 +965,8 @@ class CardanocliJs {
     const auxScript = options.auxScript
       ? auxScriptToString(this.dir, options.auxScript)
       : "";
-
-    if (!this.protocolParametersPath) this.queryProtocolParameters();
-
     const scriptInvalid = options.scriptInvalid ? "--script-invalid" : "";
     execSync(`${this.cliPath} transaction build-raw \
-                --alonzo-era \
                 ${txInString} \
                 ${txOutString} \
                 ${txInCollateralString} \
@@ -922,7 +986,6 @@ class CardanocliJs {
                 } \
                 --fee ${options.fee ? options.fee : 0} \
                 --out-file ${this.dir}/tmp/tx_${UID}.raw \
-                --protocol-params-file ${this.protocolParametersPath} \
                 ${this.era}`);
 
     return `${this.dir}/tmp/tx_${UID}.raw`;
@@ -985,7 +1048,6 @@ class CardanocliJs {
     const witnessOverride = options.witnessOverride
       ? `--witness-override ${options.witnessOverride}`
       : "";
-    if (!this.protocolParametersPath) this.queryProtocolParameters();
     execSync(`${this.cliPath} transaction build \
                 ${txInString} \
                 ${txOutString} \
@@ -1008,7 +1070,6 @@ class CardanocliJs {
                 --out-file ${this.dir}/tmp/tx_${UID}.raw \
                 ${changeAddressString} \
                 --${this.network} \
-                --protocol-params-file ${this.protocolParametersPath} \
                 ${this.era}`);
 
     return `${this.dir}/tmp/tx_${UID}.raw`;
@@ -1124,6 +1185,11 @@ class CardanocliJs {
     }
     const UID = Math.random().toString(36).substr(2, 9);
     const signingKeys = signingKeysToString(options.signingKeys);
+    console.log(`${this.cliPath} transaction sign \
+    --tx-body-file ${options.txBody} \
+    --${this.network} \
+    ${signingKeys} \
+    --out-file ${this.dir}/tmp/tx_${UID}.signed`);
     execSync(`${this.cliPath} transaction sign \
         --tx-body-file ${options.txBody} \
         --${this.network} \
@@ -1202,26 +1268,6 @@ class CardanocliJs {
         .toString()
         .replace(/\s+/g, " ")
         .split(" ")[1]
-    );
-  }
-
-  /**
-   *
-   * @param {paymentAddr} address
-   * @param {Value} value
-   * @returns {lovelace}
-   */
-  transactionCalculateMinRequiredUtxo(address, value) {
-    this.queryProtocolParameters();
-    const multiAsset = multiAssetToString(value);
-    return parseInt(
-        execSync(`${this.cliPath} transaction calculate-min-required-utxo \
-                --alonzo-era \
-                --tx-out ${address}+${multiAsset} \
-                --protocol-params-file ${this.protocolParametersPath}`)
-            .toString()
-            .replace(/\s+/g, " ")
-            .split(" ")[1]
     );
   }
 
